@@ -60,21 +60,17 @@ agent.on("checkMidnight", function(ignore) {
 function checkWeather() {
     
     //Get all the various bits from the Arduino over UART
-    //local incomingStream = blob(100);
-    local incomingStream = "What if I do a really long string perhaps that will allocate enough space for the size of array I need to record all the weather data coming in";
-    local result = NOCHAR;
-    local counter = 0;
-
     server.log("Gathering new weather data");
     
     //Clean out any previous characters in any buffers
-    //SERIAL.flush();
+    SERIAL.flush();
 
     //Ping the Arduino with the ! character to get the latest data
     SERIAL.write("!");
 
     //Wait for initial character to come in
-    counter = 0;
+    local counter = 0;
+    local result = NOCHAR;
     while(result == NOCHAR)
     {
         result = SERIAL.read(); //Wait for a new character to arrive
@@ -89,7 +85,7 @@ function checkWeather() {
     //server.log("Counter: " + counter);
     
     // Collect bytes
-    incomingStream = "";
+    local incomingStream = "";
     while (result != '\n')  // Keep reading until we see a newline
     {
         counter = 0;
@@ -110,24 +106,16 @@ function checkWeather() {
         
         //server.log("Test: " + format("%c", result)); // Display in log window
 
-        //incomingStream.writen(result,'b');
         incomingStream += format("%c", result);
-        //toggleTxLED();  // Toggle the TX LED
+        toggleTxLED();  // Toggle the TX LED
 
         result = SERIAL.read(); //Grab the next character in the que
     }
     
-    //incomingStream.tostring();
-    
-    server.log("We heard: " + format("%s", incomingStream)); // Display in log window
-    //server.log("We heard: " + incomingStream.tostring()); // Display in log window
+
+    //server.log("We heard: " + format("%s", incomingStream)); // Display in log window
     server.log("Arduino read complete");
 
-    //while(!incomingStream.eos()) 
-    //{
-    //    server.log(incomingStream.readn('b').tochar() );
-    //}
-        
     hardware.pin9.write(1); //TX LED off
 
     // Send info to agent, that will in turn push to internet
@@ -145,5 +133,8 @@ checkWeather();
 
 //Power down the imp to low power mode, then wake up after 10 seconds
 //Wunderground has a minimum of 2.5 seconds between Rapidfire reports
-//server.sleepfor(10);
+imp.onidle(function() {
+  server.log("Nothing to do, going to sleep for 10 seconds");
+  server.sleepfor(10);
+});
 

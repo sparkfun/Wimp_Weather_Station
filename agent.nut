@@ -1,8 +1,15 @@
-// This agent assumes all calculations have been done on the device
-// Talks to wunderground rapid fire server (updates of up to once every 2.5 sec)
+// This agent gathers data from the device and pushes to Wunderground
+// Talks to wunderground rapid fire server (updates of up to once every 10 sec)
+// by: Nathan Seidle
+//     SparkFun Electronics
+// date: October 4, 2013
+// license: BeerWare
+//          Please use, reuse, and modify this code as you need.
+//          We hope it saves you some time, or helps you learn something!
+//          If you find it handy, and we meet some day, you can buy me a beer or iced tea in return.
+
 // Example incoming serial string from device: 
 // $,winddir=270,windspeedmph=0.0,windgustmph=0.0,windgustdir=0,windspdmph_avg2m=0.0,winddir_avg2m=12,windgustmph_10m=0.0,windgustdir_10m=0,humidity=998.0,tempf=-1766.2,rainin=0.00,dailyrainin=0.00,pressure=-999.00,batt_lvl=16.11,light_lvl=3.32,#
-
 
 local cycleCounts = 58;
 
@@ -11,14 +18,14 @@ local midnightReset = false; //Keeps track of a once per day cumulative rain res
 // When we hear something from the device, split it apart and post it
 device.on("postToInternet", function(dataString) {
     
-    //server.log(dataString);
+    //server.log("Incoming: " + dataString);
     
     //Break the incoming string into pieces by comma
     a <- mysplit(dataString,',');
 
     if(a[0] != "$" || a[16] != "#")
     {
-        server.log(format("Error: incorrect frame received (%s, %s)", a[0], a[17]));
+        server.log(format("Error: incorrect frame received (%s, %s)", a[0], a[16]));
         return(0);
     }
     
@@ -42,6 +49,13 @@ device.on("postToInternet", function(dataString) {
     local light_lvl = a[15];
     //a[16] is #
     
+    //Correct for the actual orientation of the weather station
+    //For my station the north indicator is pointing due west
+    winddir = windCorrect(winddir);
+    windgustdir = windCorrect(windgustdir);
+    winddir_avg2m = windCorrect(winddir_avg2m);
+    windgustdir_10m = windCorrect(windgustdir_10m);
+
     //Correct for negative temperatures. This is fixed in the latest libraries: https://learn.sparkfun.com/tutorials/mpl3115a2-pressure-sensor-hookup-guide
     currentTemp <- mysplit(tempf, '=');
     local badTempf = currentTemp[1].tointeger();
@@ -54,14 +68,19 @@ device.on("postToInternet", function(dataString) {
         tempf = tempc * 9/5 + 32; //Convert back to F
         tempf = "tempf=" + tempf; //put a string on it
     }
-    
+
+    //Correct for humidity out of bounds
+    currentHumidity <- mysplit(humidity, '=');
+    if(currentHumidity[1].tointeger() > 99) humidity = "humidity=99";
+    if(currentHumidity[1].tointeger() < 0) humidity = "humidity=0";
+
     //Turn Pascal pressure into baromin (Inches Mercury at Altimeter Setting)
     local baromin = "baromin=" + convertToInHg(pressure);
     
     //Calculate a dew point
     currentHumidity <- mysplit(humidity, '=');
     currentTempF <- mysplit(tempf, '=');
-    local dewpt = "dewpt=" + calcDewPoint(currentHumidity[1].tointeger(), currentTempF[1].tointeger());
+    local dewptf = "dewptf=" + calcDewPoint(currentHumidity[1].tointeger(), currentTempF[1].tointeger());
 
     //Now we form the large string to pass to wunderground
     local strMainSite = "http://rtupdate.wunderground.com/weatherstation/updateweatherstation.php";
@@ -77,7 +96,7 @@ device.on("postToInternet", function(dataString) {
     strCT += "+" + format("%02d", currentTime.hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec);
     //Not sure if wunderground expects the + or a %2B. We shall see.
     //server.log(strCT);
-    
+
     local bigString = strMainSite;
     bigString += "?" + strID;
     bigString += "&" + strPW;
@@ -95,46 +114,108 @@ device.on("postToInternet", function(dataString) {
     bigString += "&" + rainin;
     bigString += "&" + dailyrainin;
     bigString += "&" + baromin;
-    //bigString += "&" + dewptf;
+    bigString += "&" + dewptf;
     //bigString += "&" + weather;
     //bigString += "&" + clouds;
     bigString += "&" + "softwaretype=SparkFunWeatherImp"; //Cause we can
     bigString += "&" + "realtime=1"; //You better believe it!
     bigString += "&" + "rtfreq=10"; //Set rapid fire freq to once every 10 seconds
-    bigString += "&" + "version=MyVersion";
     bigString += "&" + "action=updateraw";
 
-    server.log("string to send: " + bigString);
+    //server.log("string to send: " + bigString);
     
-    //Push to internet
+    //Push to Wunderground
     local request = http.post(bigString, {}, "");
     local response = request.sendsync();
-    server.log("Wunderground response=" + response.body);
+    server.log("Wunderground response = " + response.body);
     server.log(batt_lvl + " " + light_lvl);
 
     //Record the extra data (batt and light) to the spreadsheet every 5 minutes or (60 * 5 / 5 = 60 cycles)
-    cycleCounts++;
+    //cycleCounts++;
     //server.log("Count: " + cycleCounts);
-    if(cycleCounts == 60)
-    {
-        cycleCounts = 0;
-        recordLevels(batt_lvl, light_lvl);
-    }
+    //if(cycleCounts == 60)
+    //{
+    //    cycleCounts = 0;
+    //    recordLevels(batt_lvl, light_lvl);
+    //}
     
+    //Get the time that this measurement was taken
+    local measurementTime = "measurementTime=";
+    measurementTime += currentTime.year + "-" + format("%02d", currentTime.month + 1) + "-" + format("%02d", currentTime.day);
+    measurementTime += "+" + format("%02d", currentTime.hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec);
+
+    //Now post to sparkfun.io
+    //Here is a list of datums: measurementTime, winddir, windspeedmph, windgustmph, windgustdir, windspdmph_avg2m, winddir_avg2m, windgustmph_10m, windgustdir_10m, humidity, tempf, rainin, dailyrainin, baromin, dewptf, batt_lvl, light_lvl
+    //http://phant-test.herokuapp.com/input/PnLZY665qRcqAJ3aPMr3?private_key=oxP5qdd7WzCOMkXoBy5X&measurementTime=16.08&winddir=3.86&windspeedmph=9.30&windgustmph=15.96&windgustdir=28.23&windspdmph_avg2m=18.87&winddir_avg2m=2.08&windgustmph_10m=21.34&windgustdir_10m=21.25&humidity=3.67&tempf=29.76&rainin=1.88&dailyrainin=29.72&baromin=11.18&dewptf=24.41&batt_lvl=10.79&light_lvl=4.74
+    
+    //Now we form the large string to pass to sparkfun.io
+    local strSparkFun = "http://phant-test.herokuapp.com/input/";
+    local publicKey = "PnLZY665qRcqAJ3aPMr3";
+    local privateKey = "private_key=oxP5qdd7WzCOMkXoBy5X";
+
+    bigString = strSparkFun;
+    bigString += publicKey;
+    bigString += "?" + privateKey;
+    bigString += "&" + measurementTime;
+    bigString += "&" + winddir;
+    bigString += "&" + windspeedmph;
+    bigString += "&" + windgustmph;
+    bigString += "&" + windgustdir;
+    bigString += "&" + windspdmph_avg2m;
+    bigString += "&" + winddir_avg2m;
+    bigString += "&" + windgustmph_10m;
+    bigString += "&" + windgustdir_10m;
+    bigString += "&" + humidity;
+    bigString += "&" + tempf;
+    bigString += "&" + rainin;
+    bigString += "&" + dailyrainin;
+    bigString += "&" + baromin;
+    bigString += "&" + dewptf;
+    bigString += "&" + batt_lvl;
+    bigString += "&" + light_lvl;
+    
+    //server.log("string to send: " + bigString);
+
+    //Push to SparkFun.io
+    local request = http.get(bigString);
+    local response = request.sendsync();
+    server.log("SparkFun.io response = " + response.body);
+
     //Check to see if we need to send a midnight reset
     checkMidnight(1);
 
     server.log("Update complete!");
 }); 
 
+//Given a string, break out the direction, correct by some value
+//Return a string
+function windCorrect(direction) {
+    temp <- mysplit(direction, '=');
+
+    //My station's North arrow is pointing due west
+    //So correct by 90 degrees
+    local dir = temp[1].tointeger() - 90; 
+    if(dir < 0) dir += 360;
+    return(temp[0] + "=" + dir);
+}
+
 //With relative humidity and temp, calculate a dew point
-//From: http://andrew.rsmas.miami.edu/bmcnoldy/Humidity.html
+//From: http://ag.arizona.edu/azmet/dewpoint.html
 function calcDewPoint(relativeHumidity, tempF) {
-    server.log("rh=" + relativeHumidity + " tempF=" + tempF);
-    local dewPoint = 243.04;
-    dewPoint = dewPoint * (math.log(relativeHumidity/100)+((17.625*tempF)/(243.04+tempF)));
-    dewPoint = dewPoint / (17.625-math.log(relativeHumidity/100)-((17.625*tempF)/(243.04+tempF)) );
-    server.log("DewPoint = " + dewPoint);
+    local tempC = (tempF - 32) * 5 / 9.0;
+
+    local L = math.log(relativeHumidity / 100.0);
+    local M = 17.27 * tempC;
+    local N = 237.3 + tempC;
+    local B = (L + (M / N)) / 17.27;
+    local dewPoint = (237.3 * B) / (1.0 - B);
+    
+    //Result is in C
+    //Convert back to F
+    dewPoint = dewPoint * 9 / 5.0 + 32;
+
+    //server.log("rh=" + relativeHumidity + " tempF=" + tempF + " tempC=" + tempC);
+    //server.log("DewPoint = " + dewPoint);
     return(dewPoint);
 }
 
@@ -203,8 +284,7 @@ function mysplit(a, b) {
           ret.push(field);
           field="";
       } else {
-          // append to field
-          field+=c.tochar();
+          field += c.tochar(); // append to field
       }
    }
    // Push the last field
