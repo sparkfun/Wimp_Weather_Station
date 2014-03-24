@@ -1,7 +1,7 @@
 Wimp Weather Station
 =========================
 
-[Wimp Weather Station](https://cdn.sparkfun.com/r/600-600/assets/learn_tutorials/2/1/7/Setup-4.jpg)
+[![Wimp Weather Station](https://cdn.sparkfun.com/r/600-600/assets/learn_tutorials/2/1/7/Setup-4.jpg)](https://cdn.sparkfun.com/assets/learn_tutorials/2/1/7/Setup-4.jpg)
 
 [*A wireless weather station based on the Electric Imp*](https://learn.sparkfun.com/tutorials/weather-station-wirelessly-connected-to-wudnerground)
 
@@ -10,7 +10,7 @@ The Wimp is a personal weather station that uses the [weather shield](https://ww
 Repository Contents
 -------------------
 
-The sketch to be loaded onto the Arduino is called *Wimp_Weather_Station*. The Squirrel code that goes on the electric imp is called *agent* and *device* for the two parts of Imp code.
+The sketch to be loaded onto the Arduino is called *Wimp_Weather_Station.ino*. The Squirrel code that goes on the electric imp is called *agent.nut* and *device.nut* for the two parts of Imp code.
 
 License Information
 -------------------
