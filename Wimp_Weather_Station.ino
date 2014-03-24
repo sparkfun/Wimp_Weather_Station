@@ -18,7 +18,6 @@
  ~30mA during sleep
  
  Todo:
- Add watch dog timer
  Reset after 45 days to avoid millis roll over problems
  */
 
