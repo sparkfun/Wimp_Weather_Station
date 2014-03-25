@@ -7,6 +7,8 @@ Wimp Weather Station
 
 The Wimp is a personal weather station that uses the [weather shield](https://www.sparkfun.com/products/12081) along with an [Electric Imp](https://www.sparkfun.com/products/11395) to push live weather data up to [Wunderground](http://www.wunderground.com/). You can help increase the accuracy and prediction of weather by adding a weather meter to your house! But why buy an off-the-shelf system when you can build you own? For around $250 you can build a cutting edge open source station that you have complete control over! All you need is a pile of parts and access to a Wifi network.
 
+Read the tutorial on how to setup your own [weather station wirelessly connected to Wunderground](https://learn.sparkfun.com/tutorials/weather-station-wirelessly-connected-to-wudnerground).
+
 Repository Contents
 -------------------
 
