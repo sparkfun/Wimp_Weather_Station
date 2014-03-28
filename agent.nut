@@ -144,43 +144,6 @@ device.on("postToInternet", function(dataString) {
     measurementTime += currentTime.year + "-" + format("%02d", currentTime.month + 1) + "-" + format("%02d", currentTime.day);
     measurementTime += "+" + format("%02d", currentTime.hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec);
 
-    //Now post to sparkfun.io
-    //Here is a list of datums: measurementTime, winddir, windspeedmph, windgustmph, windgustdir, windspdmph_avg2m, winddir_avg2m, windgustmph_10m, windgustdir_10m, humidity, tempf, rainin, dailyrainin, baromin, dewptf, batt_lvl, light_lvl
-    //http://phant-test.herokuapp.com/input/PnLZY665qRcqAJ3aPMr3?private_key=oxP5qdd7WzCOMkXoBy5X&measurementTime=16.08&winddir=3.86&windspeedmph=9.30&windgustmph=15.96&windgustdir=28.23&windspdmph_avg2m=18.87&winddir_avg2m=2.08&windgustmph_10m=21.34&windgustdir_10m=21.25&humidity=3.67&tempf=29.76&rainin=1.88&dailyrainin=29.72&baromin=11.18&dewptf=24.41&batt_lvl=10.79&light_lvl=4.74
-    
-    //Now we form the large string to pass to sparkfun.io
-    local strSparkFun = "http://phant-test.herokuapp.com/input/";
-    local publicKey = "PnLZY665qRcqAJ3aPMr3";
-    local privateKey = "private_key=oxP5qdd7WzCOMkXoBy5X";
-
-    bigString = strSparkFun;
-    bigString += publicKey;
-    bigString += "?" + privateKey;
-    bigString += "&" + measurementTime;
-    bigString += "&" + winddir;
-    bigString += "&" + windspeedmph;
-    bigString += "&" + windgustmph;
-    bigString += "&" + windgustdir;
-    bigString += "&" + windspdmph_avg2m;
-    bigString += "&" + winddir_avg2m;
-    bigString += "&" + windgustmph_10m;
-    bigString += "&" + windgustdir_10m;
-    bigString += "&" + humidity;
-    bigString += "&" + tempf;
-    bigString += "&" + rainin;
-    bigString += "&" + dailyrainin;
-    bigString += "&" + baromin;
-    bigString += "&" + dewptf;
-    bigString += "&" + batt_lvl;
-    bigString += "&" + light_lvl;
-    
-    //server.log("string to send: " + bigString);
-
-    //Push to SparkFun.io
-    local request = http.get(bigString);
-    local response = request.sendsync();
-    server.log("SparkFun.io response = " + response.body);
-
     //Check to see if we need to send a midnight reset
     checkMidnight(1);
 
