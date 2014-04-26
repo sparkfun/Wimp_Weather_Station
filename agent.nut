@@ -11,9 +11,12 @@
 // Example incoming serial string from device: 
 // $,winddir=270,windspeedmph=0.0,windgustmph=0.0,windgustdir=0,windspdmph_avg2m=0.0,winddir_avg2m=12,windgustmph_10m=0.0,windgustdir_10m=0,humidity=998.0,tempf=-1766.2,rainin=0.00,dailyrainin=0.00,pressure=-999.00,batt_lvl=16.11,light_lvl=3.32,#
 
-local cycleCounts = 58;
+local STATION_ID = "KCOBOULD95";
+local STATION_PW = "myPassWord"; //Note that you must only use alphanumerics in your password. Http post won't work otherwise.
+local LOCAL_ALTITUDE_METERS = 1638; //Accurate for the roof on my house
 
 local midnightReset = false; //Keeps track of a once per day cumulative rain reset
+
 
 // When we hear something from the device, split it apart and post it
 device.on("postToInternet", function(dataString) {
@@ -85,8 +88,8 @@ device.on("postToInternet", function(dataString) {
     //Now we form the large string to pass to wunderground
     local strMainSite = "http://rtupdate.wunderground.com/weatherstation/updateweatherstation.php";
 
-    local strID = "ID=KCOBOULD95";
-    local strPW = "PASSWORD=GetMeIn1";
+    local strID = "ID=" + STATION_ID;
+    local strPW = "PASSWORD=" + STATION_PW;
 
     //Form the current date/time
     //Note: .month is 0 to 11!
@@ -130,19 +133,46 @@ device.on("postToInternet", function(dataString) {
     server.log("Wunderground response = " + response.body);
     server.log(batt_lvl + " " + light_lvl);
 
-    //Record the extra data (batt and light) to the spreadsheet every 5 minutes or (60 * 5 / 5 = 60 cycles)
-    //cycleCounts++;
-    //server.log("Count: " + cycleCounts);
-    //if(cycleCounts == 60)
-    //{
-    //    cycleCounts = 0;
-    //    recordLevels(batt_lvl, light_lvl);
-    //}
-    
     //Get the time that this measurement was taken
     local measurementTime = "measurementTime=";
     measurementTime += currentTime.year + "-" + format("%02d", currentTime.month + 1) + "-" + format("%02d", currentTime.day);
     measurementTime += "+" + format("%02d", currentTime.hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec);
+
+    //Now post to data.sparkfun.com
+    //Here is a list of datums: measurementTime, winddir, windspeedmph, windgustmph, windgustdir, windspdmph_avg2m, winddir_avg2m, windgustmph_10m, windgustdir_10m, humidity, tempf, rainin, dailyrainin, baromin, dewptf, batt_lvl, light_lvl
+
+    //Now we form the large string to pass to sparkfun
+    local strSparkFun = "http://data.sparkfun.com/input/";
+    local publicKey = "dZ4EVmE8yGCRGx5XRX1W";
+    local privateKey = "private_key=myPrivateKey";
+
+    bigString = strSparkFun;
+    bigString += publicKey;
+    bigString += "?" + privateKey;
+    bigString += "&" + measurementTime;
+    bigString += "&" + winddir;
+    bigString += "&" + windspeedmph;
+    bigString += "&" + windgustmph;
+    bigString += "&" + windgustdir;
+    bigString += "&" + windspdmph_avg2m;
+    bigString += "&" + winddir_avg2m;
+    bigString += "&" + windgustmph_10m;
+    bigString += "&" + windgustdir_10m;
+    bigString += "&" + humidity;
+    bigString += "&" + tempf;
+    bigString += "&" + rainin;
+    bigString += "&" + dailyrainin;
+    bigString += "&" + baromin;
+    bigString += "&" + dewptf;
+    bigString += "&" + batt_lvl;
+    bigString += "&" + light_lvl;
+    
+    server.log("string to send: " + bigString);
+
+    //Push to SparkFun
+    local request = http.get(bigString);
+    local response = request.sendsync();
+    server.log("SparkFun response = " + response.body);
 
     //Check to see if we need to send a midnight reset
     checkMidnight(1);
@@ -221,13 +251,12 @@ function recordLevels(batt, light) {
 //Given pressure in pascals, convert the pressure to Altimeter Setting, inches mercury
 function convertToInHg(pressure_Pa)
 {
-    local station_elevation_m = 1638; //Accurate for the roof on my house
     local pressure_mb = pressure_Pa / 100; //pressure is now in millibars, 1 pascal = 0.01 millibars
     
     local part1 = pressure_mb - 0.3; //Part 1 of formula
     local part2 = 8.42288 / 100000.0;
     local part3 = math.pow((pressure_mb - 0.3), 0.190284);
-    local part4 = station_elevation_m / part3;
+    local part4 = LOCAL_ALTITUDE_METERS / part3;
     local part5 = (1.0 + (part2 * part4));
     local part6 = math.pow(part5, (1.0/0.190284));
     local altimeter_setting_pressure_mb = part1 * part6; //Output is now in adjusted millibars
