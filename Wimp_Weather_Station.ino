@@ -20,11 +20,8 @@
  Todo:
  Reset after 45 days to avoid millis roll over problems
  
- Accumulated rain for 24 hrs? - small bug on device.nut
-
- Wind gust
- and speed
- is the 3.3V pin tied on the weather shield or elsewhere?
+ What was the wind direction and speed gust for the last 10 minutes?
+ Is the 3.3V pin tied on the weather shield or elsewhere?
  */
 
 #include <avr/wdt.h> //We need watch dog for this program
@@ -74,7 +71,7 @@ volatile byte windClicks = 0;
 
 byte windspdavg[120]; //120 bytes to keep track of 2 minute average
 int winddiravg[120]; //120 ints to keep track of 2 minute average
-float windgust_10m[10]; //10 floats to keep track of 10 minute max
+float windgust_10m[10]; //10 floats to keep track of largest gust in the last 10 minutes
 int windgustdirection_10m[10]; //10 ints to keep track of 10 minute max
 volatile float rainHour[60]; //60 floating numbers to keep track of 60 minutes of rain
 
@@ -191,25 +188,25 @@ void loop()
     if(++seconds_2m > 119) seconds_2m = 0;
 
     //Calc the wind speed and direction every second for 120 second to get 2 minute average
-    float currentSpeed = get_wind_speed();
-    int currentDirection = get_wind_direction();
-    windspdavg[seconds_2m] = (int)currentSpeed;
-    winddiravg[seconds_2m] = currentDirection;
+    windspeedmph = get_wind_speed();
+    winddir = get_wind_direction();
+    windspdavg[seconds_2m] = (int)windspeedmph;
+    winddiravg[seconds_2m] = winddir;
     //if(seconds_2m % 10 == 0) displayArrays();
 
     //Check to see if this is a gust for the minute
-    if(currentSpeed > windgust_10m[minutes_10m])
+    if(windspeedmph > windgust_10m[minutes_10m])
     {
-      windgust_10m[minutes_10m] = currentSpeed;
-      windgustdirection_10m[minutes_10m] = currentDirection;
+      windgust_10m[minutes_10m] = windspeedmph;
+      windgustdirection_10m[minutes_10m] = winddir;
     }
 
     //Check to see if this is a gust for the day
     //Resets at midnight each night
-    if(currentSpeed > windgustmph)
+    if(windspeedmph > windgustmph)
     {
-      windgustmph = currentSpeed;
-      windgustdir = currentDirection;
+      windgustmph = windspeedmph;
+      windgustdir = winddir;
     }
 
     //Blink stat LED briefly to show we are alive
@@ -299,8 +296,8 @@ void midnightReset()
 {
   dailyrainin = 0; //Reset daily amount of rain
 
-  windgustmph = 0; //Zero out this minute's gust
-  windgustdir = 0; //Zero out the gust direction
+  windgustmph = 0; //Zero out the windgust for the day
+  windgustdir = 0; //Zero out the gust direction for the day
 
   minutes = 0; //Reset minute tracker
   seconds = 0;
@@ -310,13 +307,7 @@ void midnightReset()
 //Calculates each of the variables that wunderground is expecting
 void calcWeather()
 {
-  //Calc winddir
-  winddir = get_wind_direction();
-
-  //Calc windspeed
-  windspeedmph = get_wind_speed();
-
-  //windgustmph and windgustdir are calculated throughout the day
+  //current winddir, current windspeed, windgustmph, and windgustdir are calculated every 100ms throughout the day
 
   //Calc windspdmph_avg2m
   float temp = 0;
