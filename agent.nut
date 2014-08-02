@@ -12,10 +12,225 @@
 // $,winddir=270,windspeedmph=0.0,windgustmph=0.0,windgustdir=0,windspdmph_avg2m=0.0,winddir_avg2m=12,windgustmph_10m=0.0,windgustdir_10m=0,humidity=998.0,tempf=-1766.2,rainin=0.00,dailyrainin=0.00,pressure=-999.00,batt_lvl=16.11,light_lvl=3.32,#
 
 local STATION_ID = "KCOBOULD95";
-local STATION_PW = "myPassWord"; //Note that you must only use alphanumerics in your password. Http post won't work otherwise.
+local STATION_PW = "password"; //Note that you must only use alphanumerics in your password. Http post won't work otherwise.
+
+local sparkfun_publicKey = "dZ4EVmE8yGCRGx5XRX1W";
+local sparkfun_privateKey = "privatekey";
+
 local LOCAL_ALTITUDE_METERS = 1638; //Accurate for the roof on my house
 
 local midnightReset = false; //Keeps track of a once per day cumulative rain reset
+
+local local_hour_offset = 7; //Mountain time is 7 hours off GMT
+
+const MAX_PROGRAM_SIZE = 0x20000;
+const ARDUINO_BLOB_SIZE = 128;
+program <- null;
+
+//------------------------------------------------------------------------------------------------------------------------------
+html <- @"<HTML>
+<BODY>
+
+<form method='POST' enctype='multipart/form-data'>
+Program the ATmega328 via the Imp.<br/><br/>
+Step 1: Select an Intel HEX file to upload: <input type=file name=hexfile><br/>
+Step 2: <input type=submit value=Press> to upload the file.<br/>
+Step 3: Check out your Arduino<br/>
+</form>
+
+</BODY>
+</HTML>
+";
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Parses a HTTP POST in multipart/form-data format
+function parse_hexpost(req, res) {
+    local boundary = req.headers["content-type"].slice(30);
+    local bindex = req.body.find(boundary);
+    local hstart = bindex + boundary.len();
+    local bstart = req.body.find("\r\n\r\n", hstart) + 4;
+    local fstart = req.body.find("\r\n\r\n--" + boundary + "--", bstart);
+    return req.body.slice(bstart, fstart);
+}
+
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Parses a hex string and turns it into an integer
+function hextoint(str) {
+    local hex = 0x0000;
+    foreach (ch in str) {
+        local nibble;
+        if (ch >= '0' && ch <= '9') {
+            nibble = (ch - '0');
+        } else {
+            nibble = (ch - 'A' + 10);
+        }
+        hex = (hex << 4) + nibble;
+    }
+    return hex;
+}
+
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Breaks the program into chunks and sends it to the device
+function send_program() {
+    if (program != null && program.len() > 0) {
+        local addr = 0;
+        local pline = {};
+        local max_addr = program.len();
+        
+        device.send("burn", {first=true});
+        while (addr < max_addr) {
+            program.seek(addr);
+            pline.data <- program.readblob(ARDUINO_BLOB_SIZE);
+            pline.addr <- addr / 2; // Address space is 16-bit
+            device.send("burn", pline)
+            addr += pline.data.len();
+        }
+        device.send("burn", {last=true});
+    }
+}        
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Parse the hex into an array of blobs
+function parse_hexfile(hex) {
+    
+    try {
+        // Look at this doc to work out what we need and don't. Max is about 122kb.
+        // https://bluegiga.zendesk.com/entries/42713448--REFERENCE-Updating-BLE11x-firmware-using-UART-DFU
+        server.log("Parsing hex file");
+        
+        // Create and blank the program blob
+        program = blob(0x20000); // 128k maximum
+        for (local i = 0; i < program.len(); i++) program.writen(0x00, 'b');
+        program.seek(0);
+        
+        local maxaddress = 0, from = 0, to = 0, line = "", offset = 0x00000000;
+        do {
+            if (to < 0 || to == null || to >= hex.len()) break;
+            from = hex.find(":", to);
+            
+            if (from < 0 || from == null || from+1 >= hex.len()) break;
+            to = hex.find(":", from+1);
+            
+            if (to < 0 || to == null || from >= to || to >= hex.len()) break;
+            line = hex.slice(from+1, to);
+            // server.log(format("[%d,%d] => %s", from, to, line));
+            
+            if (line.len() > 10) {
+                local len = hextoint(line.slice(0, 2));
+                local addr = hextoint(line.slice(2, 6));
+                local type = hextoint(line.slice(6, 8));
+
+                // Ignore all record types except 00, which is a data record. 
+                // Look out for 02 records which set the high order byte of the address space
+                if (type == 0) {
+                    // Normal data record
+                } else if (type == 4 && len == 2 && addr == 0 && line.len() > 12) {
+                    // Set the offset
+                    offset = hextoint(line.slice(8, 12)) << 16;
+                    if (offset != 0) {
+                        server.log(format("Set offset to 0x%08X", offset));
+                    }
+                    continue;
+                } else {
+                    server.log("Skipped: " + line)
+                    continue;
+                }
+
+                // Read the data from 8 to the end (less the last checksum byte)
+                program.seek(offset + addr)
+                for (local i = 8; i < 8+(len*2); i+=2) {
+                    local datum = hextoint(line.slice(i, i+2));
+                    program.writen(datum, 'b')
+                }
+                
+                // Checking the checksum would be a good idea but skipped for now
+                local checksum = hextoint(line.slice(-2));
+                
+                /// Shift the end point forward
+                if (program.tell() > maxaddress) maxaddress = program.tell();
+                
+            }
+        } while (from != null && to != null && from < to);
+
+        // Crop, save and send the program 
+        server.log(format("Max address: 0x%08x", maxaddress));
+        program.resize(maxaddress);
+        send_program();
+        server.log("Free RAM: " + (imp.getmemoryfree()/1024) + " kb")
+        return true;
+        
+    } catch (e) {
+        server.log(e)
+        return false;
+    }
+    
+}
+
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Handle the agent requests
+http.onrequest(function (req, res) {
+    // return res.send(400, "Bad request");
+    // server.log(req.method + " to " + req.path)
+    if (req.method == "GET") {
+        res.send(200, html);
+    } else if (req.method == "POST") {
+
+        if ("content-type" in req.headers) {
+            if (req.headers["content-type"].len() >= 19
+             && req.headers["content-type"].slice(0, 19) == "multipart/form-data") {
+                local hex = parse_hexpost(req, res);
+                if (hex == "") {
+                    res.header("Location", http.agenturl());
+                    res.send(302, "HEX file uploaded");
+                } else {
+                    device.on("done", function(ready) {
+                        res.header("Location", http.agenturl());
+                        res.send(302, "HEX file uploaded");                        
+                        server.log("Programming completed")
+                    })
+                    server.log("Programming started")
+                    parse_hexfile(hex);
+                }
+            } else if (req.headers["content-type"] == "application/json") {
+                local json = null;
+                try {
+                    json = http.jsondecode(req.body);
+                } catch (e) {
+                    server.log("JSON decoding failed for: " + req.body);
+                    return res.send(400, "Invalid JSON data");
+                }
+                local log = "";
+                foreach (k,v in json) {
+                    if (typeof v == "array" || typeof v == "table") {
+                        foreach (k1,v1 in v) {
+                            log += format("%s[%s] => %s, ", k, k1, v1.tostring());
+                        }
+                    } else {
+                        log += format("%s => %s, ", k, v.tostring());
+                    }
+                }
+                server.log(log)
+                return res.send(200, "OK");
+            } else {
+                return res.send(400, "Bad request");
+            }
+        } else {
+            return res.send(400, "Bad request");
+        }
+    }
+})
+
+
+//------------------------------------------------------------------------------------------------------------------------------
+// Handle the device coming online
+device.on("ready", function(ready) {
+    if (ready) send_program();
+});
+
+//------------------------------------------------------------------------------------------------------------------------------
 
 
 // When we hear something from the device, split it apart and post it
@@ -143,11 +358,10 @@ device.on("postToInternet", function(dataString) {
 
     //Now we form the large string to pass to sparkfun
     local strSparkFun = "http://data.sparkfun.com/input/";
-    local publicKey = "dZ4EVmE8yGCRGx5XRX1W";
-    local privateKey = "private_key=myPrivateKey";
+    local privateKey = "private_key=" + sparkfun_privateKey;
 
     bigString = strSparkFun;
-    bigString += publicKey;
+    bigString += sparkfun_publicKey;
     bigString += "?" + privateKey;
     bigString += "&" + measurementTime;
     bigString += "&" + winddir;
@@ -167,8 +381,6 @@ device.on("postToInternet", function(dataString) {
     bigString += "&" + batt_lvl;
     bigString += "&" + light_lvl;
     
-    server.log("string to send: " + bigString);
-
     //Push to SparkFun
     local request = http.get(bigString);
     local response = request.sendsync();
@@ -214,15 +426,22 @@ function calcDewPoint(relativeHumidity, tempF) {
 
 function checkMidnight(ignore) {
     //Check to see if it's midnight. If it is, send @ to Arduino to reset time based variables
-    //Calculate local time
-    local d = date(time()-(7*60*60)); //-7 hours for Mountain Time
-    //server.log(d.hour);
-    if(d.hour == 0 && midnightReset == false){
-        server.log("Sending midnight reset");
-        midnightReset = true; //We should only reset once
-        device.send("sendMidnightReset", 1);
+
+    //Get the local time that this measurement was taken
+    local localTime = calcLocalTime(); 
+    
+    //server.log("Local hour = " + format("%c", localTime[0]) + format("%c", localTime[1]));
+
+    if(localTime[0].tochar() == "0" && localTime[1].tochar() == "0")
+    {
+        if(midnightReset == false)
+        {
+            server.log("Sending midnight reset");
+            midnightReset = true; //We should only reset once
+            device.send("sendMidnightReset", 1);
+        }
     }
-    else if (d.hour != 0) {
+    else {
         midnightReset = false; //Reset our state
     }
 }
@@ -282,4 +501,122 @@ function mysplit(a, b) {
    // Push the last field
    ret.push(field);
    return ret;
+}
+
+//Given UTC time and a local offset and a date, calculate the local time
+//Includes a daylight savings time calc for the US
+function calcLocalTime()
+{
+    //Get the time that this measurement was taken
+    local currentTime = date(time(), 'u');
+    local hour = currentTime.hour; //Most of the work will be on the current hour
+
+    //Since 2007 DST starts on the second Sunday in March and ends the first Sunday of November
+    //Let's just assume it's going to be this way for awhile (silly US government!)
+    //Example from: http://stackoverflow.com/questions/5590429/calculating-daylight-savings-time-from-only-date
+    local dst = false; //Assume we're not in DST
+    if(currentTime.month > 3 || currentTime.month < 11) dst = true; //DST is happening!
+    local DoW = day_of_week(currentTime.year, currentTime.month, currentTime.day); //Get the day of the week. 0 = Sunday, 6 = Saturday
+    //In March, we are DST if our previous Sunday was on or after the 8th.
+    local previousSunday = currentTime.day - DoW;
+    if (currentTime.month == 3)
+    {
+        if(previousSunday >= 8) dst = true; 
+    } 
+    //In November we must be before the first Sunday to be dst.
+    //That means the previous Sunday must be before the 1st.
+    if(currentTime.month == 11)
+    {
+        if(previousSunday <= 0) dst = true;
+    }
+    if(dst == true) hour++; //If we're in DST add an extra hour
+    
+    //Convert UTC hours to local current time using local_hour
+    if(hour < local_hour_offset)
+        hour += 24; //Add 24 hours before subtracting local offset
+    hour -= local_hour_offset;
+    
+    local AMPM = "AM";
+    if(hour > 12)
+    {
+        hour -= 12; //Get rid of military time
+        AMPM = "PM";
+    }
+
+    currentTime = format("%02d", hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec) + "%20" + AMPM;
+    //server.log("Local time: " + currentTime);
+    return(currentTime);
+}
+
+//Given the current year/month/day
+//Returns 0 (Sunday) through 6 (Saturday) for the day of the week
+//Assumes we are operating in the 2000-2099 century
+//From: http://en.wikipedia.org/wiki/Calculating_the_day_of_the_week
+function day_of_week(year, month, day)
+{
+
+  //offset = centuries table + year digits + year fractional + month lookup + date
+  local centuries_table = 6; //We assume this code will only be used from year 2000 to year 2099
+  local year_digits;
+  local year_fractional;
+  local month_lookup;
+  local offset;
+
+  //Example Feb 9th, 2011
+
+  //First boil down year, example year = 2011
+  year_digits = year % 100; //year_digits = 11
+  year_fractional = year_digits / 4; //year_fractional = 2
+
+  switch(month) {
+  case 1: 
+    month_lookup = 0; //January = 0
+    break; 
+  case 2: 
+    month_lookup = 3; //February = 3
+    break; 
+  case 3: 
+    month_lookup = 3; //March = 3
+    break; 
+  case 4: 
+    month_lookup = 6; //April = 6
+    break; 
+  case 5: 
+    month_lookup = 1; //May = 1
+    break; 
+  case 6: 
+    month_lookup = 4; //June = 4
+    break; 
+  case 7: 
+    month_lookup = 6; //July = 6
+    break; 
+  case 8: 
+    month_lookup = 2; //August = 2
+    break; 
+  case 9: 
+    month_lookup = 5; //September = 5
+    break; 
+  case 10: 
+    month_lookup = 0; //October = 0
+    break; 
+  case 11: 
+    month_lookup = 3; //November = 3
+    break; 
+  case 12: 
+    month_lookup = 5; //December = 5
+    break; 
+  default: 
+    month_lookup = 0; //Error!
+    return(-1);
+  }
+
+  offset = centuries_table + year_digits + year_fractional + month_lookup + day;
+  //offset = 6 + 11 + 2 + 3 + 9 = 31
+  offset %= 7; // 31 % 7 = 3 Wednesday!
+
+  return(offset); //Day of week, 0 to 6
+
+  //Example: May 11th, 2012
+  //6 + 12 + 3 + 1 + 11 = 33
+  //5 = Friday! It works!
 }

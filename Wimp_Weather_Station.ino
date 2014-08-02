@@ -19,6 +19,12 @@
  
  Todo:
  Reset after 45 days to avoid millis roll over problems
+ 
+ Accumulated rain for 24 hrs? - small bug on device.nut
+
+ Wind gust
+ and speed
+ is the 3.3V pin tied on the weather shield or elsewhere?
  */
 
 #include <avr/wdt.h> //We need watch dog for this program
@@ -166,12 +172,10 @@ void setup()
   // turn on interrupts
   interrupts();
 
-  //Serial.println(F("Wimp Weather Station online! Test lots more characters")); //11,006 - fails
-  //Serial.println("Wimp Weather Station online! Test lots more characters"); //10,840 - works
-  Serial.println("Wimp Weather Station online!"); //10,840 - fails
+  Serial.println("Wimp Weather Station online!");
   reportWeather();
 
-  wdt_enable(WDTO_1S); //Unleash the beast
+//  wdt_enable(WDTO_1S); //Unleash the beast
 }
 
 void loop()
