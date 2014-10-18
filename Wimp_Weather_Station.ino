@@ -52,6 +52,7 @@ const byte REFERENCE_3V3 = A3;
 //Global Variables
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 long lastSecond; //The millis counter to see when a second rolls by
+unsigned int minutesSinceLastReset; //Used to reset variables after 24 hours. Imp should tell us when it's midnight, this is backup.
 byte seconds; //When it hits 60, increase the current minute
 byte seconds_2m; //Keeps track of the "wind speed/dir avg" over last 2 minutes array of data
 byte minutes; //Keeps track of where we are in various arrays of data
@@ -225,6 +226,8 @@ void loop()
 
       rainHour[minutes] = 0; //Zero out this minute's rainfall amount
       windgust_10m[minutes_10m] = 0; //Zero out this minute's gust
+      
+      minutesSinceLastReset++; //It's been another minute since last night's midnight reset     
     }
   }
 
@@ -239,7 +242,7 @@ void loop()
     }
     else if(incoming == '@') //Special character from Imp indicating midnight local time
     {
-      midnightReset(); //Reset a bunch of variables like rain and total rain
+      midnightReset(); //Reset a bunch of variables like rain and daily total rain
       //Serial.print("Midnight reset");
     }
     else if(incoming == '#') //Special character from Imp indicating a hardware reset
@@ -247,6 +250,14 @@ void loop()
       //Serial.print("Watchdog reset");
       delay(5000); //This will cause the system to reset because we don't pet the dog
     }
+  }
+  
+  //If we go for more than 24 hours without a midnight reset then force a reset
+  //24 hours * 60 mins/hr = 1,440 minutes + 10 extra minutes. We hope that Imp is doing it.
+  if(minutesSinceLastReset > (1440 + 10))
+  {
+      midnightReset(); //Reset a bunch of variables like rain and daily total rain
+      //Serial.print("Emergency midnight reset");
   }
 
   delay(100); //Update every 100ms. No need to go any faster.
@@ -302,6 +313,8 @@ void midnightReset()
   minutes = 0; //Reset minute tracker
   seconds = 0;
   lastSecond = millis(); //Reset variable used to track minutes
+  
+  minutesSinceLastReset = 0; //Zero out the backup midnight reset variable
 }
 
 //Calculates each of the variables that wunderground is expecting
