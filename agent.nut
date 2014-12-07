@@ -244,6 +244,7 @@ device.on("postToInternet", function(dataString) {
     if(a[0] != "$" || a[16] != "#")
     {
         server.log(format("Error: incorrect frame received (%s, %s)", a[0], a[16]));
+        server.log(format("Received: %s)", dataString));
         return(0);
     }
     
@@ -266,6 +267,8 @@ device.on("postToInternet", function(dataString) {
     local batt_lvl = a[14];
     local light_lvl = a[15];
     //a[16] is #
+    
+    server.log(tempf);
     
     //Correct for the actual orientation of the weather station
     //For my station the north indicator is pointing due west
@@ -348,10 +351,8 @@ device.on("postToInternet", function(dataString) {
     server.log("Wunderground response = " + response.body);
     server.log(batt_lvl + " " + light_lvl);
 
-    //Get the time that this measurement was taken
-    local measurementTime = "measurementTime=";
-    measurementTime += currentTime.year + "-" + format("%02d", currentTime.month + 1) + "-" + format("%02d", currentTime.day);
-    measurementTime += "+" + format("%02d", currentTime.hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec);
+    //Get the local time that this measurement was taken
+    local localMeasurementTime = "measurementTime=" + calcLocalTime();
 
     //Now post to data.sparkfun.com
     //Here is a list of datums: measurementTime, winddir, windspeedmph, windgustmph, windgustdir, windspdmph_avg2m, winddir_avg2m, windgustmph_10m, windgustdir_10m, humidity, tempf, rainin, dailyrainin, baromin, dewptf, batt_lvl, light_lvl
@@ -363,7 +364,7 @@ device.on("postToInternet", function(dataString) {
     bigString = strSparkFun;
     bigString += sparkfun_publicKey;
     bigString += "?" + privateKey;
-    bigString += "&" + measurementTime;
+    bigString += "&" + localMeasurementTime;
     bigString += "&" + winddir;
     bigString += "&" + windspeedmph;
     bigString += "&" + windgustmph;
@@ -432,7 +433,7 @@ function checkMidnight(ignore) {
     
     //server.log("Local hour = " + format("%c", localTime[0]) + format("%c", localTime[1]));
 
-    if(localTime[0].tochar() == "0" && localTime[1].tochar() == "0")
+    if(localTime[0].tochar() == "0" && localTime[1].tochar() == "4")
     {
         if(midnightReset == false)
         {
@@ -514,23 +515,33 @@ function calcLocalTime()
     //Since 2007 DST starts on the second Sunday in March and ends the first Sunday of November
     //Let's just assume it's going to be this way for awhile (silly US government!)
     //Example from: http://stackoverflow.com/questions/5590429/calculating-daylight-savings-time-from-only-date
-    local dst = false; //Assume we're not in DST
-    if(currentTime.month > 3 || currentTime.month < 11) dst = true; //DST is happening!
-    local DoW = day_of_week(currentTime.year, currentTime.month, currentTime.day); //Get the day of the week. 0 = Sunday, 6 = Saturday
-    //In March, we are DST if our previous Sunday was on or after the 8th.
+    
+    //The Imp .month returns 0-11. DoW expects 1-12 so we add one.
+    local month = currentTime.month + 1;
+    
+    local DoW = day_of_week(currentTime.year, month, currentTime.day); //Get the day of the week. 0 = Sunday, 6 = Saturday
     local previousSunday = currentTime.day - DoW;
-    if (currentTime.month == 3)
+
+    local dst = false; //Assume we're not in DST
+    if(month > 3 && month < 11) dst = true; //DST is happening!
+
+    //In March, we are DST if our previous Sunday was on or after the 8th.
+    if (month == 3)
     {
         if(previousSunday >= 8) dst = true; 
     } 
     //In November we must be before the first Sunday to be dst.
     //That means the previous Sunday must be before the 1st.
-    if(currentTime.month == 11)
+    if(month == 11)
     {
         if(previousSunday <= 0) dst = true;
     }
-    if(dst == true) hour++; //If we're in DST add an extra hour
-    
+
+    if(dst == true)
+    {
+        hour++; //If we're in DST add an extra hour
+    }
+
     //Convert UTC hours to local current time using local_hour
     if(hour < local_hour_offset)
         hour += 24; //Add 24 hours before subtracting local offset
@@ -542,6 +553,7 @@ function calcLocalTime()
         hour -= 12; //Get rid of military time
         AMPM = "PM";
     }
+    if(hour == 0) hour = 12; //Midnight edge case
 
     currentTime = format("%02d", hour) + "%3A" + format("%02d", currentTime.min) + "%3A" + format("%02d", currentTime.sec) + "%20" + AMPM;
     //server.log("Local time: " + currentTime);
@@ -619,4 +631,12 @@ function day_of_week(year, month, day)
   //Example: May 11th, 2012
   //6 + 12 + 3 + 1 + 11 = 33
   //5 = Friday! It works!
+
+   //Devised by Tomohiko Sakamoto in 1993, it is accurate for any Gregorian date:
+   /*t <- [ 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+   if(month < 3) year--;
+   //year = month < 3;
+ return (year + year/4 - year/100 + year/400 + t[month-1] + day) % 7;
+   //return 4;
+   */
 }

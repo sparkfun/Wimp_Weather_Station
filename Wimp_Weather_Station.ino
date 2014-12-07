@@ -25,10 +25,11 @@
  */
 
 #include <avr/wdt.h> //We need watch dog for this program
-//#include <SoftwareSerial.h> //Connection to Imp
 #include <Wire.h> //I2C needed for sensors
 #include "MPL3115A2.h" //Pressure sensor
 #include "HTU21D.h" //Humidity sensor
+
+//#define ENABLE_LIGHTNING
 
 //SoftwareSerial imp(8, 9); // RX, TX into Imp pin 7
 
@@ -42,12 +43,26 @@ const byte WSPEED = 3;
 const byte RAIN = 2;
 const byte STAT1 = 7;
 
+#ifdef ENABLE_LIGHTNING
+const byte LIGHTNING_IRQ = 4; //Not really an interrupt pin, we will catch it in software
+const byte slaveSelectPin = 10; //SS for AS3935
+#endif
+
 // analog I/O pins
 const byte WDIR = A0;
 const byte LIGHT = A1;
 const byte BATT = A2;
 const byte REFERENCE_3V3 = A3;
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+#ifdef ENABLE_LIGHTNING
+#include "AS3935.h" //Lighting dtector
+#include <SPI.h> //Needed for lighting sensor
+
+byte SPItransfer(byte sendByte);
+
+AS3935 AS3935(SPItransfer, slaveSelectPin, LIGHTNING_IRQ);
+#endif
 
 //Global Variables
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -61,6 +76,10 @@ byte minutes_10m; //Keeps track of where we are in wind gust/dir over last 10 mi
 long lastWindCheck = 0;
 volatile long lastWindIRQ = 0;
 volatile byte windClicks = 0;
+
+#ifdef ENABLE_LIGHTNING
+byte lightning_distance = 0;
+#endif
 
 //We need to keep track of the following variables:
 //Wind speed/dir each update (no storage)
@@ -136,7 +155,6 @@ void setup()
   wdt_disable(); //We don't want the watchdog during init
 
   Serial.begin(9600);
-  //imp.begin(19200);
 
   pinMode(WSPEED, INPUT_PULLUP); // input from wind meters windspeed sensor
   pinMode(RAIN, INPUT_PULLUP); // input from wind meters rain gauge sensor
@@ -145,7 +163,7 @@ void setup()
   pinMode(LIGHT, INPUT);
   pinMode(BATT, INPUT);
   pinMode(REFERENCE_3V3, INPUT);
-  
+
   pinMode(STAT1, OUTPUT);
 
   midnightReset(); //Reset rain totals
@@ -160,6 +178,10 @@ void setup()
   //Configure the humidity sensor
   myHumidity.begin();
 
+#ifdef ENABLE_LIGHTNING
+  startLightning(); //Init the lighting sensor
+#endif
+
   seconds = 0;
   lastSecond = millis();
 
@@ -173,7 +195,7 @@ void setup()
   Serial.println("Wimp Weather Station online!");
   reportWeather();
 
-//  wdt_enable(WDTO_1S); //Unleash the beast
+  //  wdt_enable(WDTO_1S); //Unleash the beast
 }
 
 void loop()
@@ -226,10 +248,20 @@ void loop()
 
       rainHour[minutes] = 0; //Zero out this minute's rainfall amount
       windgust_10m[minutes_10m] = 0; //Zero out this minute's gust
-      
+
       minutesSinceLastReset++; //It's been another minute since last night's midnight reset     
     }
   }
+  
+  //Check to see if there's been lighting
+#ifdef ENABLE_LIGHTNING
+  if(digitalRead(LIGHTNING_IRQ) == HIGH)
+  {
+    //We've got something!
+    lightning_distance = readLightning();
+  }
+#endif
+  
 
   //Wait for the imp to ping us with the ! character
   if(Serial.available())
@@ -239,6 +271,13 @@ void loop()
     {
       reportWeather(); //Send all the current readings out the imp and to its agent for posting to wunderground. Takes 196ms
       //Serial.print("Pinged!");
+      
+#ifdef ENABLE_LIGHTNING
+      //Give imp time to transmit then read any erroneous lightning strike
+      delay(1000); //Give the Imp time to transmit 
+      readLightning(); //Clear any readings and forget it
+#endif
+      
     }
     else if(incoming == '@') //Special character from Imp indicating midnight local time
     {
@@ -251,13 +290,13 @@ void loop()
       delay(5000); //This will cause the system to reset because we don't pet the dog
     }
   }
-  
+
   //If we go for more than 24 hours without a midnight reset then force a reset
   //24 hours * 60 mins/hr = 1,440 minutes + 10 extra minutes. We hope that Imp is doing it.
   if(minutesSinceLastReset > (1440 + 10))
   {
-      midnightReset(); //Reset a bunch of variables like rain and daily total rain
-      //Serial.print("Emergency midnight reset");
+    midnightReset(); //Reset a bunch of variables like rain and daily total rain
+    //Serial.print("Emergency midnight reset");
   }
 
   delay(100); //Update every 100ms. No need to go any faster.
@@ -313,8 +352,8 @@ void midnightReset()
   minutes = 0; //Reset minute tracker
   seconds = 0;
   lastSecond = millis(); //Reset variable used to track minutes
-  
-  minutesSinceLastReset = 0; //Zero out the backup midnight reset variable
+
+    minutesSinceLastReset = 0; //Zero out the backup midnight reset variable
 }
 
 //Calculates each of the variables that wunderground is expecting
@@ -378,6 +417,8 @@ void calcWeather()
 
   //Calc battery level
   batt_lvl = get_battery_level();
+
+  //Lightning is checked in the main loop
 }
 
 //Returns the voltage of the light sensor based on the 3.3V rail
@@ -387,30 +428,31 @@ float get_light_level()
   float operatingVoltage = averageAnalogRead(REFERENCE_3V3);
 
   float lightSensor = averageAnalogRead(LIGHT);
-  
+
   operatingVoltage = 3.3 / operatingVoltage; //The reference voltage is 3.3V
-  
+
   lightSensor *= operatingVoltage;
-  
+
   return(lightSensor);
 }
 
 //Returns the voltage of the raw pin based on the 3.3V rail
-//This allows us to ignore what VCC might be (an Arduino plugged into USB has VCC of 4.5 to 5.2V)
-//Battery level is connected to the RAW pin on Arduino and is fed through two 5% resistors:
+//The battery can ranges from 4.2V down to around 3.3V
+//This function allows us to ignore what VCC might be (an Arduino plugged into USB has VCC of 4.5 to 5.2V)
+//The weather shield has a pin called RAW (VIN) fed through through two 5% resistors and connected to A2 (BATT):
 //3.9K on the high side (R1), and 1K on the low side (R2)
 float get_battery_level()
 {
   float operatingVoltage = averageAnalogRead(REFERENCE_3V3);
 
   float rawVoltage = averageAnalogRead(BATT);
-  
+
   operatingVoltage = 3.30 / operatingVoltage; //The reference voltage is 3.3V
-  
+
   rawVoltage *= operatingVoltage; //Convert the 0 to 1023 int to actual voltage on BATT pin
-  
+
   rawVoltage *= 4.90; //(3.9k+1k)/1k - multiply BATT voltage by the voltage divider to get actual system voltage
-  
+
   return(rawVoltage);
 }
 
@@ -465,44 +507,10 @@ int get_wind_direction()
   return (-1); // error, disconnected?
 }
 
-
 //Reports the weather string to the Imp
 void reportWeather()
 {
   calcWeather(); //Go calc all the various sensors
-
-  /*imp.print("$,winddir=");
-  imp.print(winddir);
-  imp.print(",windspeedmph=");
-  imp.print(windspeedmph, 1);
-  imp.print(",windgustmph=");
-  imp.print(windgustmph, 1);
-  imp.print(",windgustdir=");
-  imp.print(windgustdir);
-  imp.print(",windspdmph_avg2m=");
-  imp.print(windspdmph_avg2m, 1);
-  imp.print(",winddir_avg2m=");
-  imp.print(winddir_avg2m);
-  imp.print(",windgustmph_10m=");
-  imp.print(windgustmph_10m, 1);
-  imp.print(",windgustdir_10m=");
-  imp.print(windgustdir_10m);
-  imp.print(",humidity=");
-  imp.print(humidity, 1);
-  imp.print(",tempf=");
-  imp.print(tempf, 1);
-  imp.print(",rainin=");
-  imp.print(rainin, 2);
-  imp.print(",dailyrainin=");
-  imp.print(dailyrainin, 2);
-  imp.print(","); //Don't print pressure= because the agent will be doing calcs on the number
-  imp.print(pressure, 2);
-  imp.print(",batt_lvl=");
-  imp.print(batt_lvl, 2);
-  imp.print(",light_lvl=");
-  imp.print(light_lvl, 2);
-  imp.print(",");
-  imp.println("#,");*/
 
   Serial.print("$,winddir=");
   Serial.print(winddir);
@@ -534,6 +542,12 @@ void reportWeather()
   Serial.print(batt_lvl, 2);
   Serial.print(",light_lvl=");
   Serial.print(light_lvl, 2);
+
+#ifdef LIGHTNING_ENABLED
+  Serial.print(",lightning_distance=");
+  Serial.print(lightning_distance);
+#endif
+
   Serial.print(",");
   Serial.println("#,");
 
@@ -554,6 +568,108 @@ int averageAnalogRead(int pinToRead)
 
   return(runningValue);  
 }
+
+//The following is for the AS3935 lightning sensor
+#ifdef ENABLE_LIGHTNING
+byte readLightning(void)
+{
+  byte distance = 0;
+  
+  //Check to see if we have lightning!
+  if(digitalRead(LIGHTNING_IRQ) == HIGH)
+  {
+    // first step is to find out what caused interrupt
+    // as soon as we read interrupt cause register, irq pin goes low
+    int irqSource = AS3935.interruptSource();
+  
+    // returned value is bitmap field, bit 0 - noise level too high, bit 2 - disturber detected, and finally bit 3 - lightning!
+    if (irqSource & 0b0001)
+    {
+      //Serial.println("Noise level too high, try adjusting noise floor");
+    }
+  
+    if (irqSource & 0b0100)
+    {
+      //Serial.println("Disturber detected");
+      distance = 64;
+    }
+  
+    if (irqSource & 0b1000)
+    {
+      // need to find how far that lightning stroke, function returns approximate distance in kilometers,
+      // where value 1 represents storm in detector's near victinity, and 63 - very distant, out of range stroke
+      // everything in between is just distance in kilometers
+      distance = AS3935.lightningDistanceKm();
+      
+      //Serial.print("Lightning: ");
+      //Serial.print(lightning_distance, DEC);
+      //Serial.println(" km");
+  
+      //The AS3935 remembers the nearest strike distance. For example 15km away then 10, then overhead all following
+      //distances (10, 20, 30) will instead output as 'Storm overhead, watch out!'. Resetting the chip erases this.
+      lightning_init();
+    }  
+  }
+  
+  return(distance);
+}
+
+void startLightning(void)
+{
+  pinMode(slaveSelectPin, OUTPUT); // set the slaveSelectPin as an output:
+
+  pinMode(LIGHTNING_IRQ, INPUT_PULLUP); //Set IRQ pin as input
+
+  SPI.begin(); //Start SPI
+
+  SPI.setDataMode(SPI_MODE1); // NB! chip uses SPI MODE1
+
+  SPI.setClockDivider(SPI_CLOCK_DIV16); //Uno 16MHz / 16 = 1MHz
+
+  SPI.setBitOrder(MSBFIRST); // and chip is MSB first
+  
+  lightning_init(); //Setup the values for the sensor
+
+  Serial.println("Lightning sensor online");
+}
+
+void lightning_init()
+{
+  AS3935.reset(); // reset all internal register values to defaults
+
+  // if lightning detector can not tune tank circuit to required tolerance,
+  // calibration function will return false
+  if(!AS3935.calibrate())
+  {
+    Serial.println("Tuning out of range, check your wiring, your sensor and make sure physics laws have not changed!");
+  }
+
+  AS3935.setOutdoors(); //The weather station is outdoors
+
+  AS3935.enableDisturbers(); //We want to know if a man-made event happens
+  AS3935.setNoiseFloor(3); //See table 16 of the AS3935 datasheet. 4-6 works. This was found through experimentation.
+
+  //printAS3935Registers();
+}
+
+/*void printAS3935Registers()
+{
+  int noiseFloor = AS3935.getNoiseFloor();
+  int spikeRejection = AS3935.getSpikeRejection();
+  int watchdogThreshold = AS3935.getWatchdogThreshold();
+  Serial.print("Noise floor is: ");
+  Serial.println(noiseFloor, DEC);
+  Serial.print("Spike rejection is: ");
+  Serial.println(spikeRejection, DEC);
+  Serial.print("Watchdog threshold is: ");
+  Serial.println(watchdogThreshold, DEC);  
+}*/
+
+byte SPItransfer(byte sendByte)
+{
+  return SPI.transfer(sendByte);
+}
+#endif
 
 
 
