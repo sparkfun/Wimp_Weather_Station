@@ -352,7 +352,7 @@ device.on("postToInternet", function(dataString) {
     server.log(batt_lvl + " " + light_lvl);
 
     //Get the local time that this measurement was taken
-    local localMeasurementTime = "measurementTime=" + calcLocalTime();
+    local localMeasurementTime = "measurementtime=" + calcLocalTime();
 
     //Now post to data.sparkfun.com
     //Here is a list of datums: measurementTime, winddir, windspeedmph, windgustmph, windgustdir, windspdmph_avg2m, winddir_avg2m, windgustmph_10m, windgustdir_10m, humidity, tempf, rainin, dailyrainin, baromin, dewptf, batt_lvl, light_lvl
